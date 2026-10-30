@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -59,6 +60,7 @@ func (f *formField) set(v string) {
 type ruleTemplate struct {
 	name   string
 	tables []string          // tables the template applies to; nil = all
+	fams   []Family          // families the template applies to; nil = both
 	note   string            // usage hint shown next to the template name
 	vals   map[string]string // field key -> value
 	vals6  map[string]string // IPv6 overrides
@@ -67,6 +69,7 @@ type ruleTemplate struct {
 var (
 	tFilterish = []string{"filter", "mangle", "raw", "security"}
 	tFwd       = []string{"filter", "mangle"}
+	onlyV6     = []Family{V6}
 	tNat       = []string{"nat"}
 	tMangle    = []string{"mangle"}
 	tRaw       = []string{"raw"}
@@ -78,6 +81,10 @@ var ruleTemplates = []ruleTemplate{
 	{name: "Allow UDP port", tables: tFilterish, vals: map[string]string{"proto": "udp", "dport": "53", "target": "ACCEPT"}},
 	{name: "Allow established/related", tables: tFilterish, vals: map[string]string{"state": "ESTABLISHED,RELATED", "target": "ACCEPT"}},
 	{name: "Allow loopback", tables: tFilterish, vals: map[string]string{"in": "lo", "target": "ACCEPT"}},
+	{name: "Allow ICMPv6", tables: tFilterish, fams: onlyV6, note: "IPv6 needs it (neighbor discovery, PMTU)",
+		vals: map[string]string{"proto": "ipv6-icmp", "target": "ACCEPT"}},
+	{name: "Allow DHCPv6 client", tables: tFilterish, fams: onlyV6,
+		vals: map[string]string{"proto": "udp", "src": "fe80::/10", "dport": "546", "target": "ACCEPT"}},
 	{name: "Allow ping", tables: tFilterish,
 		vals:  map[string]string{"proto": "icmp", "extra": "--icmp-type echo-request", "target": "ACCEPT"},
 		vals6: map[string]string{"proto": "ipv6-icmp", "extra": "--icmpv6-type echo-request"}},
@@ -143,7 +150,11 @@ func newRuleForm(fam Family, table, chain string, userChains []string, hist *[]s
 	f := &ruleForm{fam: fam, table: table, chain: chain}
 	var names []string
 	for _, t := range ruleTemplates {
-		if t.tables == nil || contains(t.tables, table) {
+		famOK := t.fams == nil
+		for _, fm := range t.fams {
+			famOK = famOK || fm == fam
+		}
+		if famOK && (t.tables == nil || contains(t.tables, table)) {
 			f.templates = append(f.templates, t)
 			names = append(names, t.name)
 		}
@@ -303,14 +314,43 @@ func (f *ruleForm) handleKey(k Key) (submit, cancel bool) {
 }
 
 func (f *ruleForm) build() ([]string, error) {
+	var args []string
+	var err error
 	if f.advanced {
-		return parseRuleInput(f.get("rule"), f.table, f.chain)
-	}
-	args, err := f.buildSimple()
-	if err == nil && len(args) == 0 {
+		args, err = parseRuleInput(f.get("rule"), f.table, f.chain)
+	} else if args, err = f.buildSimple(); err == nil && len(args) == 0 {
 		err = errors.New("rule is empty")
 	}
+	if err == nil {
+		err = checkFamily(args, f.fam)
+	}
 	return args, err
+}
+
+// checkFamily catches source/destination addresses of the wrong IP family,
+// for which ip6tables/iptables only report "host/network not found".
+func checkFamily(args []string, fam Family) error {
+	for i := 0; i+1 < len(args); i++ {
+		switch args[i] {
+		case "-s", "--source", "--src", "-d", "--destination", "--dst":
+		default:
+			continue
+		}
+		for _, item := range strings.Split(args[i+1], ",") {
+			host, _, _ := strings.Cut(item, "/")
+			if net.ParseIP(host) == nil {
+				continue // a hostname; let iptables resolve it
+			}
+			if v6 := strings.Contains(host, ":"); v6 != (fam == V6) {
+				got := "an IPv4"
+				if v6 {
+					got = "an IPv6"
+				}
+				return fmt.Errorf("%s is %s address, but this is the %s ruleset (switch with 6 in the main view)", host, got, fam)
+			}
+		}
+	}
+	return nil
 }
 
 func (f *ruleForm) buildSimple() ([]string, error) {

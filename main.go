@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -17,7 +19,7 @@ func main() {
 		watch    = flag.Bool("w", false, "start in watch (auto refresh) mode")
 		interval = flag.Duration("i", time.Second, "watch refresh interval")
 		bin4     = flag.String("iptables", "iptables", "iptables command; -save/-restore are derived from it (e.g. iptables-legacy)")
-		bin6     = flag.String("ip6tables", "ip6tables", "ip6tables command")
+		bin6     = flag.String("ip6tables", "", "ip6tables command (default: derived from -iptables, e.g. ip6tables-legacy)")
 		noMouse  = flag.Bool("no-mouse", false, "disable mouse support (M toggles it at runtime)")
 		state    = flag.String("state", "/var/lib/iptables-tui/disabled.json", "state file holding disabled rules")
 		showVer  = flag.Bool("version", false, "print the version and exit")
@@ -27,6 +29,9 @@ func main() {
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+	if *bin6 == "" {
+		*bin6 = derive6(*bin4)
+	}
 	if *showVer {
 		fmt.Println("iptables-tui", version)
 		return
@@ -62,6 +67,17 @@ func main() {
 	if err := newApp(opts, be, store).Run(); err != nil {
 		fatalf("%v", err)
 	}
+}
+
+// derive6 maps an iptables command to its IPv6 sibling so both families use
+// the same backend: iptables-legacy -> ip6tables-legacy,
+// /usr/sbin/iptables-nft -> /usr/sbin/ip6tables-nft.
+func derive6(bin4 string) string {
+	dir, base := filepath.Split(bin4)
+	if strings.HasPrefix(base, "iptables") {
+		return dir + "ip6tables" + strings.TrimPrefix(base, "iptables")
+	}
+	return "ip6tables"
 }
 
 func fatalf(format string, args ...any) {

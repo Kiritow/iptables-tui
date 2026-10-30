@@ -5,7 +5,11 @@
 ## 功能
 
 - 浏览 filter / nat / mangle / raw / security 各表的链和规则，显示包/字节计数、策略、引用关系
-- IPv4 / IPv6 切换（`iptables` / `ip6tables`），支持 legacy / nft 后端（`-iptables iptables-legacy`）
+- IPv4（`iptables`）与 IPv6（`ip6tables`）：
+  - `-6` 以 IPv6 启动；运行中按 `6` 或点击表标签行左侧的 IPv4/IPv6 切换，两边的光标位置各自保留；
+  - 支持 legacy / nft 后端：`-iptables iptables-legacy` 时 IPv6 自动使用 `ip6tables-legacy`，不会混用；
+  - 模板会自动使用对应协议族的地址和 ICMP 类型；IPv6 另有"放行 ICMPv6"（邻居发现依赖它）和"DHCPv6 客户端"模板；
+  - 在 IPv6 规则里填了 IPv4 地址（或反过来），表单会立即提示，而不是等 ip6tables 报 "host/network not found"。
 - watch 模式：定时自动刷新，`+pkts` 列显示两次刷新之间新增的包数并高亮
 - 添加规则：
   - **简单模式**：模板（放行端口、放行 established、TCPMSS clamp-to-PMTU、端口转发 DNAT、MASQUERADE、限速、日志……按表过滤，有链限制的模板会提示可用的链）+ 表单字段，实时预览生成的命令
@@ -42,7 +46,7 @@ sudo ./iptables-tui -6 -t nat -w -i 1s
 | `-6` | 以 IPv6 模式启动 |
 | `-t TABLE` | 初始表（默认 filter） |
 | `-w` / `-i 1s` | 启动即进入 watch 模式 / 刷新间隔（默认 1 秒） |
-| `-iptables NAME` / `-ip6tables NAME` | 使用的命令，`-save`/`-restore` 由此派生，如 `iptables-legacy` |
+| `-iptables NAME` / `-ip6tables NAME` | 使用的命令，`-save`/`-restore` 由此派生，如 `iptables-legacy`；`-ip6tables` 默认由 `-iptables` 推导 |
 | `-state PATH` | 禁用规则存储文件（默认 `/var/lib/iptables-tui/disabled.json`） |
 | `-no-mouse` | 不启用鼠标（运行中可按 `M` 切换） |
 
@@ -54,7 +58,8 @@ sudo ./iptables-tui -6 -t nat -w -i 1s
 |---|---|
 | `↑↓ j k` `PgUp PgDn` `g G` | 移动光标 |
 | `Tab` `←→ h l` | 切换链 / 规则面板 |
-| `1`-`5` `[` `]` | 切换表；`6` 切换 IPv4/IPv6 |
+| `1`-`5` `[` `]` | 切换表 |
+| `6` | 切换 IPv4（iptables）/ IPv6（ip6tables） |
 | `Enter` / `Backspace` | 打开链、跳转到目标链或查看规则详情 / 返回 |
 | `/` `s` | 过滤当前面板 / 全局搜索 |
 | `w` `+` `-` `r` `x` | watch 开关、刷新间隔、立即刷新、精确计数 |

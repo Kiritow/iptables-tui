@@ -162,6 +162,18 @@ func (a *App) drawTabs(y int) {
 	s, W := a.scr, a.scr.w
 	snap := a.snaps[a.fam]
 	x := 0
+	for _, fam := range []Family{V4, V6} {
+		st := stDim
+		if fam == a.fam {
+			st = Style{Fg: cBlack, Bg: cMagenta, Attr: AttrBold}
+		}
+		fx := x
+		x = s.Text(x, y, W, " "+fam.String()+" ", st)
+		if fam != a.fam {
+			a.hit(fx, y, x, y+1, func(int, bool) { a.handleKey(runeKey('6')) }, nil)
+		}
+	}
+	x = s.Text(x, y, W, " │ ", stBorder)
 	for i, name := range tableNames {
 		st := stDefault
 		if snap != nil && !snap.Tables[name].Loaded {
@@ -554,11 +566,12 @@ func (a *App) drawKeys(y int) {
 	case a.focus == paneChains:
 		hints = []hint{{"Enter", "rules", Key{Code: KeyEnter}}, {"a", "add rule", r('a')}, {"N", "new", r('N')},
 			{"R", "rename", r('R')}, {"X", "delete", r('X')}, {"F", "flush", r('F')}, {"P", "policy", r('P')},
-			{"/", "filter", r('/')}, {"s", "search", r('s')}, {"w", "watch", r('w')}, {"?", "help", r('?')}, {"q", "quit", r('q')}}
+			{"/", "filter", r('/')}, {"s", "search", r('s')}, {"6", "IPv4/6", r('6')}, {"w", "watch", r('w')},
+			{"?", "help", r('?')}, {"q", "quit", r('q')}}
 	default:
 		hints = []hint{{"a/i/o", "add", r('a')}, {"e", "edit", r('e')}, {"d", "del", r('d')}, {"Space", "on/off", r(' ')},
 			{"K/J", "move", none}, {"Enter", "open", Key{Code: KeyEnter}}, {"/", "filter", r('/')}, {"s", "search", r('s')},
-			{"D", "disabled", r('D')}, {"w", "watch", r('w')}, {"?", "help", r('?')}, {"q", "quit", r('q')}}
+			{"D", "disabled", r('D')}, {"6", "IPv4/6", r('6')}, {"w", "watch", r('w')}, {"?", "help", r('?')}, {"q", "quit", r('q')}}
 	}
 	x := 0
 	for _, h := range hints {
@@ -679,7 +692,8 @@ func (a *App) showHelp() {
 		h("Navigation"),
 		t("  Up/Down j/k  PgUp/PgDn  Home/End g/G   move the cursor"),
 		t("  Tab  Left/Right h/l                     switch between chains and rules"),
-		t("  1-5  [ ]                                switch table      6  toggle IPv4/IPv6"),
+		t("  1-5  [ ]                                switch table"),
+		t("  6         switch between IPv4 (iptables) and IPv6 (ip6tables); also -6 on the command line"),
 		t("  Enter     on a chain: show its rules; on a rule: jump to its target chain, or details"),
 		t("  Backspace b                             go back after jumping to a chain"),
 		t("  /         filter the focused pane (live; several words = all must match), Esc clears"),
