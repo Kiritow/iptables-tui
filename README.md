@@ -125,3 +125,7 @@ unshare -rn sh -c 'PATH=/usr/sbin:$PATH; iptables -A INPUT -p tcp --dport 22 -j 
 | `form.go` | 添加/编辑对话框（模板、简单/高级模式） |
 | `clipboard.go` | 复制粘贴、IPv4/IPv6 规则转换 |
 | `app.go` `view.go` | 事件循环、后台 worker、按键处理与界面绘制 |
+
+## License
+
+[MIT](LICENSE)
