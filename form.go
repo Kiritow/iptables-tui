@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -98,6 +99,10 @@ var ruleTemplates = []ruleTemplate{
 	{name: "Rate-limit new connections", tables: tFilterish,
 		vals: map[string]string{"proto": "tcp", "dport": "22", "state": "NEW", "limit": "6/min", "target": "ACCEPT"}},
 	{name: "Log packets", tables: tFilterish, vals: map[string]string{"target": "LOG", "topts": `--log-prefix "iptables: "`}},
+	{name: "Log via NFLOG", note: "watch it with n (packet monitor)",
+		vals: map[string]string{"target": "NFLOG", "topts": `--nflog-group {nflog-group} --nflog-prefix "iptui: " --nflog-size 128`}},
+	{name: "Trace packets (TRACE)", tables: tRaw, note: "PREROUTING/OUTPUT; watch with T; remove when done",
+		vals: map[string]string{"proto": "tcp", "dport": "80", "target": "TRACE"}},
 	{name: "Clamp TCP MSS to PMTU", tables: tFwd, note: "FORWARD / OUTPUT / POSTROUTING only",
 		vals: map[string]string{"proto": "tcp", "extra": "--tcp-flags SYN,RST SYN", "target": "TCPMSS", "topts": "--clamp-mss-to-pmtu"}},
 	{name: "Port forward (DNAT)", tables: tNat, note: "PREROUTING / OUTPUT only",
@@ -116,12 +121,15 @@ var ruleTemplates = []ruleTemplate{
 }
 
 var tableTargets = map[string][]string{
-	"filter":   {"ACCEPT", "DROP", "REJECT", "RETURN", "LOG", "TCPMSS"},
-	"nat":      {"DNAT", "SNAT", "MASQUERADE", "REDIRECT", "RETURN", "ACCEPT", "LOG"},
-	"mangle":   {"ACCEPT", "DROP", "RETURN", "MARK", "CONNMARK", "TCPMSS", "DSCP", "LOG"},
-	"raw":      {"ACCEPT", "DROP", "RETURN", "CT", "NOTRACK", "LOG"},
-	"security": {"ACCEPT", "DROP", "RETURN", "SECMARK", "CONNSECMARK", "LOG"},
+	"filter":   {"ACCEPT", "DROP", "REJECT", "RETURN", "LOG", "NFLOG", "TCPMSS"},
+	"nat":      {"DNAT", "SNAT", "MASQUERADE", "REDIRECT", "RETURN", "ACCEPT", "LOG", "NFLOG"},
+	"mangle":   {"ACCEPT", "DROP", "RETURN", "MARK", "CONNMARK", "TCPMSS", "DSCP", "LOG", "NFLOG"},
+	"raw":      {"ACCEPT", "DROP", "RETURN", "CT", "NOTRACK", "TRACE", "LOG", "NFLOG"},
+	"security": {"ACCEPT", "DROP", "RETURN", "SECMARK", "CONNSECMARK", "LOG", "NFLOG"},
 }
+
+// defaultNFLOGGroup is the group used by the NFLOG template and monitor (-nflog-group).
+var defaultNFLOGGroup = 100
 
 const noTarget = "(none)"
 
@@ -238,7 +246,7 @@ func (f *ruleForm) applyTemplate(t ruleTemplate) {
 		}
 	}
 	for k, v := range t.vals {
-		f.field(k).set(v)
+		f.field(k).set(strings.ReplaceAll(v, "{nflog-group}", strconv.Itoa(defaultNFLOGGroup)))
 	}
 	if f.fam == V6 {
 		for k, v := range t.vals6 {

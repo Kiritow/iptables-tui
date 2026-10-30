@@ -314,6 +314,10 @@ func wrapText(s string, width int) []string {
 	}
 	var out []string
 	for _, para := range strings.Split(s, "\n") {
+		if strWidth(para) <= width {
+			out = append(out, strings.TrimRight(para, " "))
+			continue
+		}
 		trimmed := strings.TrimLeft(para, " ")
 		indent := para[:len(para)-len(trimmed)]
 		if len(indent) > width/2 {

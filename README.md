@@ -23,6 +23,17 @@
   - 地址（`-s`/`-d`/NAT 目标）、`-f`、`-m frag` 等仅单一协议族有的选项，以及跳转到目标表中不存在的链，都会明确列出，需要手工修正；
   - 粘贴单条规则时打开预填好的添加对话框，可修改后再提交；多条规则在确认框中逐条列出，并通过一次 `iptables-restore` 事务原子插入；
   - 已禁用的规则粘贴后仍是禁用状态（生成新的存储项）。剪贴板只在内存中，不持久化。
+- NFLOG：
+  - 各表的 target 可选 NFLOG，"Log via NFLOG" 模板默认使用 group 100（`-nflog-group` 可改），规则列表显示为 `NFLOG:100`；
+  - `n` 打开数据包监视器：程序自己通过 netlink 接收该 group 的数据包（只用标准库），解析 IPv4/IPv6（含扩展头）和 TCP/UDP/ICMP，显示时间、接口、协议、地址端口、标志、前缀；
+  - group 已被 ulogd 等占用时给出明确提示；内核缓冲区溢出时计数显示丢包；
+  - 可暂停、过滤、查看详情（含十六进制），`W` 导出为 pcap 文件，可用 Wireshark/tcpdump 打开。
+- TRACE：
+  - raw 表可选 TRACE，"Trace packets" 模板；
+  - `T` 打开追踪监视器，显示每个被追踪的包依次经过哪些表/链、每一步的结果和匹配的规则，以及最终结果；
+  - nft 后端通过 `xtables-monitor --trace` 获取，legacy 后端读取内核日志 `/dev/kmsg`；
+  - TRACE 开销较大，匹配条件尽量窄，用完记得删除。
+- 监视器在后台持续运行，返回规则界面后标签行会显示计数；退出程序时自动停止（包括结束 xtables-monitor 进程）。
 - 编辑、删除、上下移动、移动到指定位置（移动通过 `iptables-restore --noflush` 原子完成，保留计数器）
 - **临时禁用 / 启用规则**（见下文）
 - 过滤（`/`，当前面板实时过滤，多个词须同时匹配）和全局搜索（`s`，跨所有表和链，含已禁用规则的原始内容，回车跳转）
@@ -43,10 +54,18 @@
 ## 构建与运行
 
 ```sh
-go build -o iptables-tui .
+make                           # 构建并显示版本号
 sudo ./iptables-tui            # 需要 root（CAP_NET_ADMIN）
 sudo ./iptables-tui -6 -t nat -w -i 1s
 ```
+
+版本号来自 git：
+- `make` 用 `git describe --tags --always --dirty` 写入版本，例如：
+  - 打了 tag 的提交：`v0.0.1`
+  - tag 之后的提交：`v0.0.1-3-gabc1234`
+  - 有未提交修改：带 `-dirty` 后缀
+- 直接 `go build` 时，使用 Go 自动记录的 tag 或 commit。
+- 程序标题栏、帮助页和 `-version` 都会显示版本号。
 
 | 参数 | 说明 |
 |---|---|
@@ -56,6 +75,8 @@ sudo ./iptables-tui -6 -t nat -w -i 1s
 | `-iptables NAME` / `-ip6tables NAME` | 使用的命令，`-save`/`-restore` 由此派生，如 `iptables-legacy`；`-ip6tables` 默认由 `-iptables` 推导 |
 | `-state PATH` | 禁用规则存储文件（默认 `/var/lib/iptables-tui/disabled.json`） |
 | `-no-mouse` | 不启用鼠标（运行中可按 `M` 切换） |
+| `-nflog-group N` | NFLOG 模板和监视器默认使用的 group（默认 100） |
+| `-version` | 显示版本号 |
 
 ## 按键
 
@@ -77,6 +98,7 @@ sudo ./iptables-tui -6 -t nat -w -i 1s
 | `N` `R` `X` `F` `P` `Z` | 新建、重命名、删除、清空链，设置策略，清零计数 |
 | `D` `L` `W` | 已禁用规则列表、命令日志、保存规则集到文件 |
 | `M` | 开关鼠标 |
+| `n` / `T` | NFLOG 数据包监视器 / TRACE 追踪监视器（监视器内：Space 暂停、Enter 详情、`/` 过滤、`c` 清空、`x` 停止、`W` 导出 pcap、Tab 切换、Esc 返回） |
 | `q` | 退出 |
 
 ## 禁用规则的实现
@@ -124,6 +146,9 @@ unshare -rn sh -c 'PATH=/usr/sbin:$PATH; iptables -A INPUT -p tcp --dport 22 -j 
 | `store.go` `ops.go` | 禁用规则存储、带校验的各项修改操作 |
 | `form.go` | 添加/编辑对话框（模板、简单/高级模式） |
 | `clipboard.go` | 复制粘贴、IPv4/IPv6 规则转换 |
+| `nflog.go` | NFLOG netlink 接收、IPv4/IPv6/TCP/UDP/ICMP 解析 |
+| `trace.go` | TRACE 输出解析（xtables-monitor / 内核日志）、pcap 导出 |
+| `monitor.go` | NFLOG/TRACE 监视器界面 |
 | `app.go` `view.go` | 事件循环、后台 worker、按键处理与界面绘制 |
 
 ## License

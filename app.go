@@ -1,11 +1,9 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -162,8 +160,22 @@ type App struct {
 	lstKey     func(k Key, i int) bool
 	lstRebuild func()
 
-	clip       *clipboard
-	form       *ruleForm
+	clip *clipboard
+	form *ruleForm
+
+	view      int // viewRules or viewMonitor
+	nflog     *monitor
+	trace     *monitor
+	mon       *monitor // monitor shown in viewMonitor
+	monSel    int
+	monTop    int
+	monRows   int
+	monFollow bool
+	monFrozen []*monItem // snapshot while paused
+	monFilter string
+	monNotify chan struct{}
+
+	version    string
 	preferAdv  bool
 	ruleHist   []string
 	lastSearch string
@@ -181,20 +193,25 @@ type App struct {
 
 func newApp(opts options, be *Backend, store *Store) *App {
 	a := &App{
-		scr:      newScreen(os.Stdout),
-		opts:     opts,
-		store:    store,
-		backends: map[Family]*Backend{opts.fam: be},
-		snaps:    map[Family]*Snapshot{},
-		prevCtr:  map[Family]map[string]uint64{},
-		fam:      opts.fam,
-		views:    map[string]tableView{},
-		watch:    opts.watch,
-		interval: opts.interval,
-		mouse:    opts.mouse,
-		jobs:     make(chan job, 32),
-		results:  make(chan result, 32),
+		scr:       newScreen(os.Stdout),
+		opts:      opts,
+		store:     store,
+		backends:  map[Family]*Backend{opts.fam: be},
+		snaps:     map[Family]*Snapshot{},
+		prevCtr:   map[Family]map[string]uint64{},
+		fam:       opts.fam,
+		views:     map[string]tableView{},
+		watch:     opts.watch,
+		interval:  opts.interval,
+		mouse:     opts.mouse,
+		jobs:      make(chan job, 32),
+		results:   make(chan result, 32),
+		monNotify: make(chan struct{}, 1),
+		version:   buildVersion(),
 	}
+	a.nflog = &monitor{kind: monNFLOG, notify: a.monNotify, byKey: map[string]*monItem{}}
+	a.trace = &monitor{kind: monTRACE, notify: a.monNotify, byKey: map[string]*monItem{}}
+	a.mon = a.nflog
 	for i, t := range tableNames {
 		if t == opts.table {
 			a.tIdx = i
@@ -210,6 +227,7 @@ func (a *App) Run() error {
 	}
 	os.Stdout.WriteString("\x1b[?1049h\x1b[?25l\x1b[?7l")
 	a.setMouse(a.mouse)
+	defer a.stopMonitors()
 	defer func() {
 		os.Stdout.WriteString("\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
 		st.restore()
@@ -264,6 +282,8 @@ func (a *App) Run() error {
 			a.resize()
 		case r := <-a.results:
 			a.applyResult(r)
+		case <-a.monNotify:
+			// new monitor data: just redraw
 		case <-tick:
 			if a.busy == 0 {
 				a.refresh()
@@ -797,6 +817,10 @@ func (a *App) handleKey(k Key) {
 		return
 	}
 	a.msg = ""
+	if a.view == viewMonitor {
+		a.handleMonitorKey(k)
+		return
+	}
 	if a.handleGlobalKey(k) {
 		return
 	}
@@ -988,6 +1012,10 @@ func (a *App) handleGlobalKey(k Key) bool {
 		a.actSearch()
 	case k.is('D'):
 		a.showDisabled()
+	case k.is('n'):
+		a.openNFLOG()
+	case k.is('T'):
+		a.openTrace()
 	case k.is('L'):
 		a.showLog()
 	case k.is('a'):
@@ -1496,54 +1524,18 @@ func (a *App) actZero() {
 // user, by default rules.v4/rules.v6 in the current directory. Overwriting an
 // existing file needs confirmation.
 func (a *App) actSave() {
-	def := "rules.v4"
+	name := "rules.v4"
 	if a.fam == V6 {
-		def = "rules.v6"
-	}
-	if wd, err := os.Getwd(); err == nil {
-		def = filepath.Join(wd, def)
+		name = "rules.v6"
 	}
 	fam := a.fam.String()
-	a.startPrompt("write "+fam+" ruleset (iptables-save) to: ", def, nil, func(s string) {
-		path := strings.TrimSpace(s)
-		if path == "" {
-			a.setMsg(msgInfo, "cancelled")
-			return
-		}
-		if abs, err := filepath.Abs(path); err == nil {
-			path = abs
-		}
-		save := func() {
+	a.promptPath("write "+fam+" ruleset (iptables-save) to: ", name, "the current "+fam+" ruleset (iptables-save)",
+		func(path string) {
 			a.mutate(func(b *Backend) (string, error) {
 				n, err := b.SaveTo(path)
 				return fmt.Sprintf("wrote %d bytes to %s", n, path), err
 			}, nil)
-		}
-		st, err := os.Stat(path)
-		switch {
-		case errors.Is(err, os.ErrNotExist):
-			save()
-			return
-		case err != nil:
-			a.setMsg(msgErr, err.Error())
-			return
-		case st.IsDir():
-			a.setMsg(msgErr, path+" is a directory")
-			return
-		}
-		lines := []textLine{
-			{"WARNING: " + path + " already exists and will be OVERWRITTEN!", stConfWarn},
-			plain(""),
-			plain(fmt.Sprintf("existing file: %d bytes, modified %s", st.Size(), st.ModTime().Format("2006-01-02 15:04:05"))),
-		}
-		if lst, err := os.Lstat(path); err == nil && lst.Mode()&os.ModeSymlink != 0 {
-			if target, err := filepath.EvalSymlinks(path); err == nil {
-				lines = append(lines, textLine{"it is a symlink; the file written is " + target, fg(cYellow)})
-			}
-		}
-		lines = append(lines, plain("its contents are replaced with the current "+fam+" ruleset (iptables-save)"))
-		a.confirm("Confirm: overwrite file", lines, save)
-	})
+		})
 }
 
 // ---- search & lists ----

@@ -6,11 +6,65 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 )
 
-const version = "0.1.0"
+// version is set at build time (see Makefile):
+//
+//	go build -ldflags "-X main.version=$(git describe --tags --always --dirty)"
+var version string
+
+// buildVersion returns the version set at build time, or else what the Go
+// toolchain recorded from git: a release tag, or the commit for other builds.
+func buildVersion() string {
+	if version != "" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	rev, dirty := "", false
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	// Go 1.24+ stamps the tag (v0.0.1) or a pseudo-version (v0.0.0-2026...-abcdef123456)
+	if v := info.Main.Version; v != "" && v != "(devel)" && !isPseudoVersion(v) {
+		return v
+	}
+	if rev == "" {
+		return "unknown"
+	}
+	if len(rev) > 12 {
+		rev = rev[:12]
+	}
+	if dirty {
+		rev += "-dirty"
+	}
+	return rev
+}
+
+func isPseudoVersion(v string) bool {
+	v, _, _ = strings.Cut(v, "+")
+	i := strings.LastIndexByte(v, '-')
+	if i < 0 || len(v)-i-1 != 12 {
+		return false
+	}
+	for _, c := range v[i+1:] {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return false
+		}
+	}
+	return true
+}
 
 func main() {
 	var (
@@ -20,20 +74,26 @@ func main() {
 		interval = flag.Duration("i", time.Second, "watch refresh interval")
 		bin4     = flag.String("iptables", "iptables", "iptables command; -save/-restore are derived from it (e.g. iptables-legacy)")
 		bin6     = flag.String("ip6tables", "", "ip6tables command (default: derived from -iptables, e.g. ip6tables-legacy)")
+		nflogGrp = flag.Int("nflog-group", defaultNFLOGGroup, "NFLOG group used by the NFLOG template and packet monitor")
 		noMouse  = flag.Bool("no-mouse", false, "disable mouse support (M toggles it at runtime)")
 		state    = flag.String("state", "/var/lib/iptables-tui/disabled.json", "state file holding disabled rules")
 		showVer  = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: %s [flags]\n\nA terminal UI for iptables. Press ? inside for help.\n\nflags:\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "iptables-tui %s\n\nusage: %s [flags]\n\nA terminal UI for iptables. Press ? inside for help.\n\nflags:\n",
+			buildVersion(), os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+	if *nflogGrp < 0 || *nflogGrp > 65535 {
+		fatalf("-nflog-group must be 0-65535")
+	}
+	defaultNFLOGGroup = *nflogGrp
 	if *bin6 == "" {
 		*bin6 = derive6(*bin4)
 	}
 	if *showVer {
-		fmt.Println("iptables-tui", version)
+		fmt.Printf("iptables-tui %s (%s)\n", buildVersion(), runtime.Version())
 		return
 	}
 	if !contains(tableNames, *table) {

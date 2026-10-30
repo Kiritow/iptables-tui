@@ -61,6 +61,14 @@ func targetStyle(t string, isChain bool) Style {
 	return fg(cMagenta)
 }
 
+// displayTarget is the target column text; NFLOG shows its group.
+func displayTarget(r *Rule) string {
+	if r.Target == "NFLOG" {
+		return "NFLOG:" + strconv.Itoa(nflogGroup(r.Spec))
+	}
+	return r.Target
+}
+
 func policyStyle(p string) Style {
 	switch p {
 	case "ACCEPT":
@@ -106,16 +114,20 @@ func (a *App) draw() {
 		return
 	}
 	a.drawHeader(0)
-	a.drawTabs(1)
-	const detailH = 3
-	bodyBot := H - 2 - detailH - 1
-	lw := a.chainPaneWidth()
-	a.drawChains(0, 2, lw, bodyBot)
-	for y := 2; y < bodyBot; y++ {
-		s.set(lw, y, '│', 1, stBorder)
+	if a.view == viewMonitor {
+		a.drawMonitor()
+	} else {
+		a.drawTabs(1)
+		const detailH = 3
+		bodyBot := H - 2 - detailH - 1
+		lw := a.chainPaneWidth()
+		a.drawChains(0, 2, lw, bodyBot)
+		for y := 2; y < bodyBot; y++ {
+			s.set(lw, y, '│', 1, stBorder)
+		}
+		a.drawRules(lw+1, 2, W, bodyBot)
+		a.drawDetail(bodyBot, detailH)
 	}
-	a.drawRules(lw+1, 2, W, bodyBot)
-	a.drawDetail(bodyBot, detailH)
 	a.drawStatus(H - 2)
 	a.drawKeys(H - 1)
 	switch a.mode {
@@ -135,6 +147,7 @@ func (a *App) drawHeader(y int) {
 	s, W := a.scr, a.scr.w
 	s.Fill(0, y, W, 1, ' ', stHeader)
 	x := s.Text(0, y, W, " iptables-tui ", stHeader)
+	x = s.Text(x, y, W, a.version+" ", Style{Fg: cWhite, Bg: cBlue})
 	fx := x
 	x = s.Text(x, y, W, "│ "+a.fam.String()+" ", stHeader)
 	a.hit(fx, y, x, y+1, func(int, bool) { a.handleKey(runeKey('6')) }, nil)
@@ -196,6 +209,13 @@ func (a *App) drawTabs(y int) {
 	}
 	if a.clip != nil {
 		info = append(info, fmt.Sprintf("clip: %d %s rule(s)", len(a.clip.rules), a.clip.fam))
+	}
+	for _, m := range []*monitor{a.nflog, a.trace} {
+		m.mu.Lock()
+		if m.running {
+			info = append(info, fmt.Sprintf("%s on: %d", m.kind, m.total))
+		}
+		m.mu.Unlock()
 	}
 	text, st := strings.Join(info, " "), fg(cYellow).with(AttrBold)
 	if text == "" && snap != nil && len(snap.Warnings) > 0 {
@@ -350,7 +370,7 @@ func (a *App) drawRules(x0, y0, x1, y1 int) {
 		numW = max(numW, len(strconv.Itoa(r.Num)))
 		pktW = max(pktW, len(a.num(pk)))
 		byW = max(byW, len(a.num(by)))
-		tW = max(tW, strWidth(r.Target))
+		tW = max(tW, strWidth(displayTarget(r)))
 		if r.HasDelta && r.DPkts > 0 {
 			dW = max(dW, len(a.num(r.DPkts))+1)
 		}
@@ -436,7 +456,7 @@ func (a *App) drawRules(x0, y0, x1, y1 int) {
 			x = s.Text(x, y, x1, lpad(d, dW)+" ", seg(fg(cGreen).with(AttrBold)))
 		}
 		tc := t.Chain(r.Target)
-		target := r.Target
+		target := displayTarget(r)
 		if r.Goto {
 			target = "@" + target
 		}
@@ -566,6 +586,16 @@ func (a *App) drawKeys(y int) {
 		hints = []hint{{"Up/Dn", "scroll", none}, {"Esc", "close", none}}
 	case a.mode == modeList || a.mode == modeForm:
 		hints = nil
+	case a.view == viewMonitor:
+		hints = []hint{{"?", "help", r('?')}, {"Esc", "rules", Key{Code: KeyEsc}}, {"Tab", "NFLOG/TRACE", Key{Code: KeyTab}},
+			{"Space", "pause", r(' ')}, {"Enter", "details", Key{Code: KeyEnter}}, {"/", "filter", r('/')},
+			{"c", "clear", r('c')}, {"x", "stop", r('x')}}
+		if a.mon.kind == monNFLOG {
+			hints = append(hints, hint{"n", "group", r('n')}, hint{"W", "pcap", r('W')})
+		} else {
+			hints = append(hints, hint{"T", "start", r('T')})
+		}
+		hints = append(hints, hint{"q", "quit", r('q')})
 	case a.focus == paneChains:
 		hints = []hint{{"?", "help", r('?')}, {"Enter", "rules", Key{Code: KeyEnter}}, {"a", "add", r('a')},
 			{"Y", "copy all", r('Y')}, {"p", "paste", r('p')}, {"N", "new", r('N')}, {"R", "rename", r('R')},
@@ -721,6 +751,16 @@ func (a *App) showHelp() {
 		t("  Space     disable / re-enable the rule"),
 		t("  K / J     move up / down (also Shift+Up/Down)     m  move to a position"),
 		t(""),
+		h("Packet monitors"),
+		t("  n         NFLOG: receive the packets that NFLOG rules send to a group (asks for the group;"),
+		t("            the \"Log via NFLOG\" template adds such a rule). Packets are decoded (IPv4/IPv6,"),
+		t("            TCP/UDP/ICMP); W writes them as a pcap file for Wireshark / tcpdump."),
+		t("  T         TRACE: show the path of packets matched by a TRACE rule (raw table, \"Trace packets\""),
+		t("            template) through every chain, with the verdict of each step. Uses"),
+		t("            xtables-monitor --trace (nft backend) or the kernel log (legacy backend)."),
+		t("  In a monitor: Space pause · Enter details · / filter · c clear · x stop · Tab other"),
+		t("  monitor · Esc back to the rules (capture keeps running in the background)."),
+		t(""),
 		h("Copy & paste"),
 		t("  y         copy the rule under the cursor"),
 		t("  Y         copy every rule shown in the chain (with a / filter: only the matching ones)"),
@@ -764,5 +804,5 @@ func (a *App) showHelp() {
 		t("  longer the same (e.g. changed by docker or fail2ban). Moves use iptables-restore and are atomic."),
 		t("  Changes are live immediately and are NOT persistent until saved (W)."),
 	}
-	a.showText("iptables-tui help", lines)
+	a.showText("iptables-tui "+a.version+" help", lines)
 }
