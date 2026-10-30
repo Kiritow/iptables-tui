@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -1461,15 +1463,26 @@ func (a *App) actZero() {
 	}, nil)
 }
 
+// actSave writes the ruleset (iptables-save output) to a file chosen by the
+// user, by default rules.v4/rules.v6 in the current directory. Overwriting an
+// existing file needs confirmation.
 func (a *App) actSave() {
-	def := "/etc/iptables/rules.v4"
+	def := "rules.v4"
 	if a.fam == V6 {
-		def = "/etc/iptables/rules.v6"
+		def = "rules.v6"
 	}
-	a.startPrompt("write "+a.fam.String()+" ruleset (iptables-save) to: ", def, nil, func(s string) {
+	if wd, err := os.Getwd(); err == nil {
+		def = filepath.Join(wd, def)
+	}
+	fam := a.fam.String()
+	a.startPrompt("write "+fam+" ruleset (iptables-save) to: ", def, nil, func(s string) {
 		path := strings.TrimSpace(s)
 		if path == "" {
+			a.setMsg(msgInfo, "cancelled")
 			return
+		}
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
 		}
 		save := func() {
 			a.mutate(func(b *Backend) (string, error) {
@@ -1478,15 +1491,29 @@ func (a *App) actSave() {
 			}, nil)
 		}
 		st, err := os.Stat(path)
-		if err != nil {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
 			save()
 			return
+		case err != nil:
+			a.setMsg(msgErr, err.Error())
+			return
+		case st.IsDir():
+			a.setMsg(msgErr, path+" is a directory")
+			return
 		}
-		a.confirm("Confirm: overwrite file", []textLine{
-			{"Overwrite " + path + "?", stConfHead},
+		lines := []textLine{
+			{"WARNING: " + path + " already exists and will be OVERWRITTEN!", stConfWarn},
+			plain(""),
 			plain(fmt.Sprintf("existing file: %d bytes, modified %s", st.Size(), st.ModTime().Format("2006-01-02 15:04:05"))),
-			plain("it is replaced with the current " + a.fam.String() + " ruleset (iptables-save)"),
-		}, save)
+		}
+		if lst, err := os.Lstat(path); err == nil && lst.Mode()&os.ModeSymlink != 0 {
+			if target, err := filepath.EvalSymlinks(path); err == nil {
+				lines = append(lines, textLine{"it is a symlink; the file written is " + target, fg(cYellow)})
+			}
+		}
+		lines = append(lines, plain("its contents are replaced with the current "+fam+" ruleset (iptables-save)"))
+		a.confirm("Confirm: overwrite file", lines, save)
 	})
 }
 
