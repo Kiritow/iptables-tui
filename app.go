@@ -142,6 +142,8 @@ type App struct {
 
 	confirmTitle string
 	confirmLines []textLine
+	confirmTop   int
+	confirmRows  int
 	confirmYes   func()
 	confirmNo    func()
 
@@ -160,6 +162,7 @@ type App struct {
 	lstKey     func(k Key, i int) bool
 	lstRebuild func()
 
+	clip       *clipboard
 	form       *ruleForm
 	preferAdv  bool
 	ruleHist   []string
@@ -654,7 +657,7 @@ func (a *App) startPrompt(label, initial string, hist *[]string, submit func(str
 // key cancels (and runs confirmNo, if the caller sets one afterwards).
 func (a *App) confirm(title string, lines []textLine, yes func()) {
 	a.mode = modeConfirm
-	a.confirmTitle, a.confirmLines = title, lines
+	a.confirmTitle, a.confirmLines, a.confirmTop = title, lines, 0
 	a.confirmYes, a.confirmNo = yes, nil
 }
 
@@ -757,6 +760,20 @@ func (a *App) handleKey(k Key) {
 		a.handlePromptKey(k)
 		return
 	case modeConfirm:
+		switch {
+		case k.Code == KeyUp:
+			a.confirmTop--
+			return
+		case k.Code == KeyDown:
+			a.confirmTop++
+			return
+		case k.Code == KeyPgUp:
+			a.confirmTop -= a.confirmRows
+			return
+		case k.Code == KeyPgDn:
+			a.confirmTop += a.confirmRows
+			return
+		}
 		a.mode = modeNormal
 		if k.is('y') || k.is('Y') {
 			a.confirmYes()
@@ -877,7 +894,7 @@ func (a *App) handleListKey(k Key) {
 func (a *App) handleFormKey(k Key) {
 	f := a.form
 	submit, cancel := f.handleKey(k)
-	if !f.editing {
+	if !f.lockMode {
 		a.preferAdv = f.advanced
 	}
 	switch {
@@ -975,6 +992,10 @@ func (a *App) handleGlobalKey(k Key) bool {
 		a.showLog()
 	case k.is('a'):
 		a.actAdd(0)
+	case k.is('Y'):
+		a.actCopy(true)
+	case k.is('p'):
+		a.actPaste()
 	case k.is('N'):
 		a.actNewChain()
 	case k.is('X'):
@@ -1061,6 +1082,8 @@ func (a *App) handleRuleKey(k Key) {
 		a.actAdd(1)
 	case k.is('e'):
 		a.actEdit()
+	case k.is('y'):
+		a.actCopy(false)
 	case k.is('d'), k.Code == KeyDelete:
 		a.actDelete()
 	case k.is(' '):
@@ -1122,8 +1145,15 @@ func (a *App) actAdd(where int) {
 			}
 		}
 	}
-	f := newRuleForm(a.fam, table, chain, a.userChains(), &a.ruleHist)
+	f := a.addForm(table, chain, pos, anchor)
 	f.advanced = a.preferAdv
+	a.form = f
+	a.mode = modeForm
+}
+
+// addForm builds the dialog that adds a rule to table/chain at pos (0 appends).
+func (a *App) addForm(table, chain string, pos int, anchor *ruleRef) *ruleForm {
+	f := newRuleForm(a.fam, table, chain, a.userChains(), &a.ruleHist)
 	if pos > 0 {
 		f.title = fmt.Sprintf("Insert rule at #%d in %s/%s", pos, table, chain)
 		f.cmdPrefix = []string{"-I", chain, strconv.Itoa(pos)}
@@ -1160,8 +1190,7 @@ func (a *App) actAdd(where int) {
 				b.AddRule(table, chain, pos, anchor, args, disabled)
 		}, sel, a.reopenForm(f))
 	}
-	a.form = f
-	a.mode = modeForm
+	return f
 }
 
 func (a *App) actEdit() {
@@ -1174,7 +1203,7 @@ func (a *App) actEdit() {
 		return
 	}
 	f := newRuleForm(a.fam, ref.table, ref.chain, a.userChains(), &a.ruleHist)
-	f.editing, f.advanced = true, true
+	f.editing, f.lockMode, f.advanced = true, true, true
 	f.title = fmt.Sprintf("Edit rule #%d in %s/%s", ref.num, ref.table, ref.chain)
 	f.cmdPrefix = []string{"-R", ref.chain, strconv.Itoa(ref.num)}
 	f.field("rule").set(joinArgs(r.Spec))

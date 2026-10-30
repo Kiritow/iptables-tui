@@ -130,7 +130,9 @@ const noTarget = "(none)"
 type ruleForm struct {
 	title     string
 	cmdPrefix []string // e.g. -A INPUT, shown in the preview
-	editing   bool     // editing an existing rule: advanced mode only
+	editing   bool     // editing an existing rule
+	lockMode  bool     // advanced mode only (edit, paste): simple mode would overwrite the rule
+	info      []string // notes shown above the preview (e.g. how a pasted rule was adapted)
 	advanced  bool
 	simple    []*formField
 	adv       []*formField
@@ -246,7 +248,7 @@ func (f *ruleForm) applyTemplate(t ruleTemplate) {
 }
 
 func (f *ruleForm) setAdvanced(on bool) {
-	if f.editing || on == f.advanced {
+	if f.lockMode || on == f.advanced {
 		return
 	}
 	if on {
@@ -330,6 +332,19 @@ func (f *ruleForm) build() ([]string, error) {
 // checkFamily catches source/destination addresses of the wrong IP family,
 // for which ip6tables/iptables only report "host/network not found".
 func checkFamily(args []string, fam Family) error {
+	for _, host := range wrongFamilyAddrs(args, fam) {
+		got := "an IPv4"
+		if fam == V4 {
+			got = "an IPv6"
+		}
+		return fmt.Errorf("%s is %s address, but this is the %s ruleset (switch with 6 in the main view)", host, got, fam)
+	}
+	return nil
+}
+
+// wrongFamilyAddrs returns the -s/-d addresses in args that belong to the other family.
+func wrongFamilyAddrs(args []string, fam Family) []string {
+	var bad []string
 	for i := 0; i+1 < len(args); i++ {
 		switch args[i] {
 		case "-s", "--source", "--src", "-d", "--destination", "--dst":
@@ -342,15 +357,11 @@ func checkFamily(args []string, fam Family) error {
 				continue // a hostname; let iptables resolve it
 			}
 			if v6 := strings.Contains(host, ":"); v6 != (fam == V6) {
-				got := "an IPv4"
-				if v6 {
-					got = "an IPv6"
-				}
-				return fmt.Errorf("%s is %s address, but this is the %s ruleset (switch with 6 in the main view)", host, got, fam)
+				bad = append(bad, host)
 			}
 		}
 	}
-	return nil
+	return bad
 }
 
 func (f *ruleForm) buildSimple() ([]string, error) {
@@ -509,15 +520,20 @@ func (a *App) drawForm() {
 	if f.err != "" {
 		preview = append(wrapText("! "+f.err, inner), preview...)
 	}
-	if len(preview) > 5 {
-		preview = preview[:5]
+	var info []string
+	for _, l := range f.info {
+		info = append(info, wrapText("* "+l, inner)...)
+	}
+	preview = append(info, preview...)
+	if len(preview) > 8 {
+		preview = preview[:8]
 	}
 	fixed := 4 + len(preview) // borders, blank line, buttons
 	visible := clamp(H-2-fixed, 1, len(fs))
 	bh := visible + fixed
 	x0, y0 := (W-bw)/2, max(0, (H-bh)/2)
 	mode := "simple · F2 advanced"
-	if f.editing {
+	if f.lockMode {
 		mode = "advanced"
 	} else if f.advanced {
 		mode = "advanced · F2 simple"
@@ -595,7 +611,9 @@ func (a *App) drawForm() {
 	py := y0 + 1 + visible + 1
 	for i, l := range preview {
 		st := pst
-		if strings.HasPrefix(l, "! ") {
+		if i < len(info) {
+			st = fg(cCyan)
+		} else if strings.HasPrefix(l, "! ") {
 			st = fg(cRed)
 		} else if strings.HasPrefix(l, "(") {
 			st = fg(cYellow)
@@ -613,7 +631,7 @@ func (a *App) drawForm() {
 		{"  OK (Enter)  ", Style{Fg: cBlack, Bg: cGreen, Attr: AttrBold}, Key{Code: KeyEnter}},
 		{"  Cancel (Esc)  ", Style{Fg: cBlack, Bg: cWhite, Attr: AttrBold}, Key{Code: KeyEsc}},
 	}
-	if !f.editing {
+	if !f.lockMode {
 		other := "Advanced"
 		if f.advanced {
 			other = "Simple"

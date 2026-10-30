@@ -101,8 +101,8 @@ func (s *Store) update(fn func(f *storeFile)) error {
 	return writeFileAtomic(s.Path, append(data, '\n'), 0o600)
 }
 
-func (s *Store) Add(e *DisabledEntry) error {
-	return s.update(func(f *storeFile) { f.Rules = append(f.Rules, e) })
+func (s *Store) Add(es ...*DisabledEntry) error {
+	return s.update(func(f *storeFile) { f.Rules = append(f.Rules, es...) })
 }
 
 // Put replaces the entry with the same ID.

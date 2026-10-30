@@ -194,6 +194,9 @@ func (a *App) drawTabs(y int) {
 	if a.ruleFilter != "" {
 		info = append(info, "rules~"+quoteArg(a.ruleFilter))
 	}
+	if a.clip != nil {
+		info = append(info, fmt.Sprintf("clip: %d %s rule(s)", len(a.clip.rules), a.clip.fam))
+	}
 	text, st := strings.Join(info, " "), fg(cYellow).with(AttrBold)
 	if text == "" && snap != nil && len(snap.Warnings) > 0 {
 		text, st = "! "+snap.Warnings[0], fg(cYellow)
@@ -564,14 +567,15 @@ func (a *App) drawKeys(y int) {
 	case a.mode == modeList || a.mode == modeForm:
 		hints = nil
 	case a.focus == paneChains:
-		hints = []hint{{"Enter", "rules", Key{Code: KeyEnter}}, {"a", "add rule", r('a')}, {"N", "new", r('N')},
-			{"R", "rename", r('R')}, {"X", "delete", r('X')}, {"F", "flush", r('F')}, {"P", "policy", r('P')},
-			{"/", "filter", r('/')}, {"s", "search", r('s')}, {"6", "IPv4/6", r('6')}, {"w", "watch", r('w')},
-			{"?", "help", r('?')}, {"q", "quit", r('q')}}
+		hints = []hint{{"?", "help", r('?')}, {"Enter", "rules", Key{Code: KeyEnter}}, {"a", "add", r('a')},
+			{"Y", "copy all", r('Y')}, {"p", "paste", r('p')}, {"N", "new", r('N')}, {"R", "rename", r('R')},
+			{"X", "delete", r('X')}, {"F", "flush", r('F')}, {"P", "policy", r('P')}, {"/", "filter", r('/')},
+			{"s", "search", r('s')}, {"w", "watch", r('w')}, {"q", "quit", r('q')}}
 	default:
-		hints = []hint{{"a/i/o", "add", r('a')}, {"e", "edit", r('e')}, {"d", "del", r('d')}, {"Space", "on/off", r(' ')},
-			{"K/J", "move", none}, {"Enter", "open", Key{Code: KeyEnter}}, {"/", "filter", r('/')}, {"s", "search", r('s')},
-			{"D", "disabled", r('D')}, {"6", "IPv4/6", r('6')}, {"w", "watch", r('w')}, {"?", "help", r('?')}, {"q", "quit", r('q')}}
+		hints = []hint{{"?", "help", r('?')}, {"a/i/o", "add", r('a')}, {"e", "edit", r('e')}, {"d", "del", r('d')},
+			{"y", "copy", r('y')}, {"p", "paste", r('p')}, {"Space", "on/off", r(' ')}, {"K/J", "move", none},
+			{"Enter", "open", Key{Code: KeyEnter}}, {"/", "filter", r('/')}, {"s", "search", r('s')},
+			{"D", "disabled", r('D')}, {"w", "watch", r('w')}, {"q", "quit", r('q')}}
 	}
 	x := 0
 	for _, h := range hints {
@@ -629,12 +633,16 @@ func (a *App) drawConfirm() {
 	}
 	bh := min(H-2, len(lines)+4)
 	rows := bh - 4
-	if len(lines) > rows {
-		lines = append(lines[:rows-1], textLine{"…", stDim})
-	}
+	a.confirmRows = rows
+	a.confirmTop = clamp(a.confirmTop, 0, max(0, len(lines)-rows))
 	x0, y0 := (W-bw)/2, (H-bh)/2
-	drawBox(s, x0, y0, bw, bh, a.confirmTitle, "y confirm · n / Esc cancel")
-	for i, l := range lines {
+	footer := "y confirm · n / Esc cancel"
+	if len(lines) > rows {
+		footer = fmt.Sprintf("%d-%d/%d · Up/Dn scroll · %s", a.confirmTop+1, a.confirmTop+rows, len(lines), footer)
+	}
+	drawBox(s, x0, y0, bw, bh, a.confirmTitle, footer)
+	for i := 0; i < rows && a.confirmTop+i < len(lines); i++ {
+		l := lines[a.confirmTop+i]
 		s.Text(x0+2, y0+1+i, x0+bw-2, l.text, l.st)
 	}
 	by := y0 + bh - 2
@@ -643,7 +651,7 @@ func (a *App) drawConfirm() {
 	yx := nx - 2 - strWidth(yes)
 	s.Text(yx, by, x0+bw-2, yes, Style{Fg: cBlack, Bg: cRed, Attr: AttrBold})
 	s.Text(nx, by, x0+bw-2, no, Style{Fg: cBlack, Bg: cWhite, Attr: AttrBold})
-	a.modal(0, 0, 0, 0, nil, nil)
+	a.modal(0, 0, 0, 0, nil, func(d int) { a.confirmTop += 3 * d })
 	a.hit(yx, by, yx+strWidth(yes), by+1, func(int, bool) { a.handleKey(runeKey('y')) }, nil)
 	a.hit(nx, by, nx+strWidth(no), by+1, func(int, bool) { a.handleKey(runeKey('n')) }, nil)
 }
@@ -712,6 +720,15 @@ func (a *App) showHelp() {
 		t("  d Del     delete the rule (asks first)"),
 		t("  Space     disable / re-enable the rule"),
 		t("  K / J     move up / down (also Shift+Up/Down)     m  move to a position"),
+		t(""),
+		h("Copy & paste"),
+		t("  y         copy the rule under the cursor"),
+		t("  Y         copy every rule shown in the chain (with a / filter: only the matching ones)"),
+		t("  p         paste below the cursor; in the chains pane: at the end of the chain"),
+		t("  One rule opens the add dialog prefilled; several are confirmed and inserted atomically."),
+		t("  Rules can go between IPv4 and IPv6: ICMP, REJECT and TTL/HL options are converted and"),
+		t("  listed; addresses of the wrong family and missing jump targets must be fixed first."),
+		t("  The clipboard is kept in memory only."),
 		t(""),
 		h("Add / edit dialog"),
 		t("  Simple mode builds a rule from a template and fields; F2 (or Ctrl-T) switches to advanced"),

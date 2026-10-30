@@ -208,6 +208,64 @@ func (b *Backend) MoveRule(ref ruleRef, to int) (int, error) {
 	return to, b.restore(sb.String())
 }
 
+type pasteRule struct {
+	args     []string
+	disabled bool
+}
+
+// PasteRules inserts rules starting at pos (0 appends) in one
+// iptables-restore transaction. Disabled rules are validated and stored first
+// and only their placeholders are inserted; they are dropped from the state
+// file again if the transaction fails.
+func (b *Backend) PasteRules(table, chain string, pos int, anchor *ruleRef, rules []pasteRule) error {
+	if anchor != nil {
+		c, _, err := b.verify(*anchor)
+		if err != nil {
+			return err
+		}
+		if pos > len(c.Rules) {
+			pos = 0
+		}
+	}
+	var entries []*DisabledEntry
+	var ids []string
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "*%s\n", table)
+	for i, r := range rules {
+		args := r.args
+		if r.disabled {
+			if err := b.checkSyntax(table, chain, r.args); err != nil {
+				return fmt.Errorf("rule %d: %w", i+1, err)
+			}
+			id := newID()
+			ids = append(ids, id)
+			entries = append(entries, &DisabledEntry{ID: id, Family: b.Family, Table: table, Chain: chain,
+				Args: r.args, DisabledAt: time.Now()})
+			args = placeholderArgs(id)
+		}
+		if pos > 0 {
+			fmt.Fprintf(&sb, "-I %s %d", quoteArg(chain), pos+i)
+		} else {
+			fmt.Fprintf(&sb, "-A %s", quoteArg(chain))
+		}
+		if len(args) > 0 {
+			sb.WriteString(" " + joinArgs(args))
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("COMMIT\n")
+	if len(entries) > 0 {
+		if err := b.store.Add(entries...); err != nil {
+			return fmt.Errorf("state file: %w", err)
+		}
+	}
+	if err := b.restore(sb.String()); err != nil {
+		_ = b.store.Remove(ids...)
+		return err
+	}
+	return nil
+}
+
 func disabledIDs(c *Chain) []string {
 	var ids []string
 	if c == nil {
