@@ -160,6 +160,21 @@ func parseEscape(b []byte) (Key, int) {
 		}
 		return k, 3
 	}
+	if b[2] == '[' {
+		// Linux console: ESC [ [ A..E are F1..F5
+		if len(b) < 4 {
+			return Key{}, 0
+		}
+		switch b[3] {
+		case 'A':
+			k.Code = KeyF1
+		case 'B':
+			k.Code = KeyF2
+		case 'E':
+			k.Code = KeyF5
+		}
+		return k, 4
+	}
 	j := 2
 	for j < len(b) && b[j] >= 0x30 && b[j] <= 0x3f {
 		j++

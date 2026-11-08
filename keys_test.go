@@ -20,6 +20,27 @@ func TestParseKeys(t *testing.T) {
 	}
 }
 
+func TestParseFunctionKeys(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want KeyCode
+	}{
+		{"\x1bOP", KeyF1}, {"\x1bOQ", KeyF2}, // xterm
+		{"\x1b[11~", KeyF1}, {"\x1b[12~", KeyF2}, {"\x1b[15~", KeyF5}, // rxvt / vt220
+		{"\x1b[[A", KeyF1}, {"\x1b[[B", KeyF2}, {"\x1b[[E", KeyF5}, // linux console
+		{"\x1b[[C", KeyUnknown}, // F3 is unbound but must not leak a 'C'
+	} {
+		keys, rest := parseKeys([]byte(c.in), false)
+		if len(keys) != 1 || len(rest) != 0 || keys[0].Code != c.want {
+			t.Errorf("%q: keys=%+v rest=%q", c.in, keys, rest)
+		}
+	}
+	// a split read must wait for the final byte instead of emitting a stray key
+	if keys, rest := parseKeys([]byte("\x1b[["), false); len(keys) != 0 || len(rest) != 3 {
+		t.Errorf("partial: keys=%+v rest=%q", keys, rest)
+	}
+}
+
 func TestParseMouse(t *testing.T) {
 	keys, _ := parseKeys([]byte("\x1b[<0;10;5M\x1b[<0;10;5m\x1b[<65;3;4M"), false)
 	if len(keys) != 3 {
