@@ -229,7 +229,9 @@ func (a *App) Run() error {
 	a.setMouse(a.mouse)
 	defer a.stopMonitors()
 	defer func() {
-		os.Stdout.WriteString("\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l")
+		// Clear before leaving the alternate screen: terminals without one
+		// (the Linux console) would otherwise keep the last frame.
+		os.Stdout.WriteString("\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[H\x1b[2J\x1b[?7h\x1b[?25h\x1b[?1049l")
 		st.restore()
 		if r := recover(); r != nil {
 			fmt.Fprintf(os.Stderr, "panic: %v\n%s", r, debug.Stack())
