@@ -568,41 +568,43 @@ func (a *App) drawStatus(y int) {
 	}
 }
 
+// keyHint is an entry of the key hint line; clicking it sends key.
+type keyHint struct {
+	k, d string
+	key  Key // KeyUnknown: not clickable
+}
+
 func (a *App) drawKeys(y int) {
 	s, W := a.scr, a.scr.w
-	type hint struct {
-		k, d string
-		key  Key // KeyUnknown: not clickable
-	}
 	none := Key{Code: KeyUnknown}
 	r := runeKey
-	var hints []hint
+	var hints []keyHint
 	switch {
 	case a.mode == modePrompt:
-		hints = []hint{{"Enter", "ok", Key{Code: KeyEnter}}, {"Esc", "cancel", Key{Code: KeyEsc}}}
+		hints = append([]keyHint{{"Enter", "ok", Key{Code: KeyEnter}}, {"Esc", "cancel", Key{Code: KeyEsc}}}, a.promptHints...)
 	case a.mode == modeConfirm:
-		hints = []hint{{"y", "yes", none}, {"other", "no", none}}
+		hints = []keyHint{{"y", "yes", none}, {"other", "no", none}}
 	case a.mode == modeText:
-		hints = []hint{{"Up/Dn", "scroll", none}, {"Esc", "close", none}}
+		hints = []keyHint{{"Up/Dn", "scroll", none}, {"Esc", "close", none}}
 	case a.mode == modeList || a.mode == modeForm:
 		hints = nil
 	case a.view == viewMonitor:
-		hints = []hint{{"?", "help", r('?')}, {"Esc", "rules", Key{Code: KeyEsc}}, {"Tab", "NFLOG/TRACE", Key{Code: KeyTab}},
+		hints = []keyHint{{"?", "help", r('?')}, {"Esc", "rules", Key{Code: KeyEsc}}, {"Tab", "NFLOG/TRACE", Key{Code: KeyTab}},
 			{"Space", "pause", r(' ')}, {"Enter", "details", Key{Code: KeyEnter}}, {"/", "filter", r('/')},
 			{"c", "clear", r('c')}, {"x", "stop", r('x')}}
 		if a.mon.kind == monNFLOG {
-			hints = append(hints, hint{"n", "group", r('n')}, hint{"W", "pcap", r('W')})
+			hints = append(hints, keyHint{"n", "group", r('n')}, keyHint{"W", "pcap", r('W')})
 		} else {
-			hints = append(hints, hint{"T", "start", r('T')})
+			hints = append(hints, keyHint{"T", "start", r('T')})
 		}
-		hints = append(hints, hint{"q", "quit", r('q')})
+		hints = append(hints, keyHint{"q", "quit", r('q')})
 	case a.focus == paneChains:
-		hints = []hint{{"?", "help", r('?')}, {"Enter", "rules", Key{Code: KeyEnter}}, {"a", "add", r('a')},
+		hints = []keyHint{{"?", "help", r('?')}, {"Enter", "rules", Key{Code: KeyEnter}}, {"a", "add", r('a')},
 			{"Y", "copy all", r('Y')}, {"p", "paste", r('p')}, {"N", "new", r('N')}, {"R", "rename", r('R')},
 			{"X", "delete", r('X')}, {"F", "flush", r('F')}, {"P", "policy", r('P')}, {"/", "filter", r('/')},
 			{"s", "search", r('s')}, {"w", "watch", r('w')}, {"q", "quit", r('q')}}
 	default:
-		hints = []hint{{"?", "help", r('?')}, {"a/i/o", "add", r('a')}, {"e", "edit", r('e')}, {"d", "del", r('d')},
+		hints = []keyHint{{"?", "help", r('?')}, {"a/i/o", "add", r('a')}, {"e", "edit", r('e')}, {"d", "del", r('d')},
 			{"y", "copy", r('y')}, {"p", "paste", r('p')}, {"Space", "on/off", r(' ')}, {"K/J", "move", none},
 			{"Enter", "open", Key{Code: KeyEnter}}, {"/", "filter", r('/')}, {"s", "search", r('s')},
 			{"D", "disabled", r('D')}, {"w", "watch", r('w')}, {"q", "quit", r('q')}}
@@ -787,7 +789,8 @@ func (a *App) showHelp() {
 		t(""),
 		h("Other"),
 		t("  W         write the ruleset (iptables-save) to a file; defaults to rules.v4 / rules.v6 in"),
-		t("            the current directory, overwriting an existing file asks first"),
+		t("            the current directory, overwriting an existing file asks first. Counters are"),
+		t("            left out, also those of the chains; Ctrl-T in the prompt includes them (-c)"),
 		t("  q Ctrl-C  quit"),
 		t(""),
 		h("How disabling works"),

@@ -336,15 +336,45 @@ func (b *Backend) RestoreEntry(e *DisabledEntry) error {
 
 func (b *Backend) ForgetEntry(id string) error { return b.store.Remove(id) }
 
-// SaveTo writes the full ruleset (iptables-save format, no counters) to path.
-func (b *Backend) SaveTo(path string) (int, error) {
-	out, err := b.run("", b.SaveBin)
+// SaveTo writes the full ruleset in iptables-save format to path. Without
+// counters the chain counters that iptables-save always prints are removed
+// too, so the file only changes when the rules do.
+func (b *Backend) SaveTo(path string, counters bool) (int, error) {
+	cmd := []string{b.SaveBin}
+	if counters {
+		cmd = append(cmd, "-c")
+	}
+	out, err := b.run("", cmd[0], cmd[1:]...)
 	if err != nil {
 		return 0, err
+	}
+	if !counters {
+		out = stripChainCounters(out)
 	}
 	if err := writeFileAtomic(path, []byte(out), 0o640); err != nil {
 		return 0, err
 	}
-	b.record(fmt.Sprintf("%s > %s", b.SaveBin, path), "", nil)
+	b.record(fmt.Sprintf("%s > %s", joinArgs(cmd), path), "", nil)
 	return len(out), nil
+}
+
+// stripChainCounters removes the trailing " [pkts:bytes]" from the chain lines
+// (":INPUT ACCEPT [12:345]") of iptables-save output. iptables-restore without
+// -c does not need them.
+func stripChainCounters(s string) string {
+	lines := strings.SplitAfter(s, "\n")
+	for i, l := range lines {
+		if !strings.HasPrefix(l, ":") {
+			continue
+		}
+		body := strings.TrimSuffix(l, "\n")
+		j := strings.LastIndex(body, " [")
+		if j < 0 || !strings.HasSuffix(body, "]") {
+			continue
+		}
+		if p, c, ok := strings.Cut(body[j+2:len(body)-1], ":"); ok && isDigits(p) && isDigits(c) {
+			lines[i] = body[:j] + l[len(body):]
+		}
+	}
+	return strings.Join(lines, "")
 }

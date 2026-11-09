@@ -137,6 +137,8 @@ type App struct {
 	promptSubmit func(string)
 	promptChange func(string)
 	promptCancel func()
+	promptKey    func(Key) bool // handles keys before the editor; true if consumed
+	promptHints  []keyHint      // extra entries of the key hint line
 
 	confirmTitle string
 	confirmLines []textLine
@@ -673,6 +675,7 @@ func (a *App) startPrompt(label, initial string, hist *[]string, submit func(str
 	a.promptLabel = label
 	a.edit.Reset(initial, hist)
 	a.promptSubmit, a.promptChange, a.promptCancel = submit, nil, nil
+	a.promptKey, a.promptHints = nil, nil
 }
 
 // confirm shows a dialog describing a change; only y/Y runs yes, any other
@@ -834,6 +837,9 @@ func (a *App) handleKey(k Key) {
 }
 
 func (a *App) handlePromptKey(k Key) {
+	if a.promptKey != nil && a.promptKey(k) {
+		return
+	}
 	act, changed := a.edit.Handle(k)
 	switch act {
 	case editSubmit:
@@ -1523,21 +1529,43 @@ func (a *App) actZero() {
 }
 
 // actSave writes the ruleset (iptables-save output) to a file chosen by the
-// user, by default rules.v4/rules.v6 in the current directory. Overwriting an
-// existing file needs confirmation.
+// user, by default rules.v4/rules.v6 in the current directory. Ctrl-T in the
+// prompt toggles the packet and byte counters, which are left out by default.
+// Overwriting an existing file needs confirmation.
 func (a *App) actSave() {
 	name := "rules.v4"
 	if a.fam == V6 {
 		name = "rules.v6"
 	}
 	fam := a.fam.String()
-	a.promptPath("write "+fam+" ruleset (iptables-save) to: ", name, "the current "+fam+" ruleset (iptables-save)",
+	counters := false
+	label := func() string {
+		if counters {
+			return "write " + fam + " ruleset (with counters) to: "
+		}
+		return "write " + fam + " ruleset (no counters) to: "
+	}
+	a.promptPath(label(), name, "the current "+fam+" ruleset (iptables-save)",
 		func(path string) {
 			a.mutate(func(b *Backend) (string, error) {
-				n, err := b.SaveTo(path)
-				return fmt.Sprintf("wrote %d bytes to %s", n, path), err
+				n, err := b.SaveTo(path, counters)
+				with := ""
+				if counters {
+					with = " with counters"
+				}
+				return fmt.Sprintf("wrote %d bytes to %s%s", n, path, with), err
 			}, nil)
 		})
+	toggle := Key{Code: KeyCtrl, Rune: 't'}
+	a.promptKey = func(k Key) bool {
+		if !k.ctrl('t') {
+			return false
+		}
+		counters = !counters
+		a.promptLabel = label()
+		return true
+	}
+	a.promptHints = []keyHint{{"^T", "counters on/off", toggle}}
 }
 
 // ---- search & lists ----
